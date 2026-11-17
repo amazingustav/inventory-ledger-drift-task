@@ -4,16 +4,15 @@ Repository: [medusajs/medusa](https://github.com/medusajs/medusa) (MIT), pinned 
 
 ---
 
-Medusa's inventory module stores the same fact twice. Reservation items record who holds which units, and each inventory level keeps `stocked_quantity` and `reserved_quantity` counters. Treat the reservation items, together with every stock change made to a level, as the ledger of record. The counters must always be derivable from it. Today they can fall out of step under concurrent checkouts or a crash in the middle of a workflow, and nothing notices. I want that silent drift prevented, and detected and repaired when it happens anyway.
+We keep getting bitten by inventory counters drifting in Medusa's inventory module. Each inventory level has `stocked_quantity` and `reserved_quantity`, but the reservation items plus the stock changes on a level are the ledger of record, and the counters should always match them. With concurrent checkouts, or when the server dies mid-workflow, they don't, and nobody notices until stock is wrong. I want that silent drift gone, and caught and fixed when it slips through anyway.
 
-What I need:
+Concretely:
 
-- Whenever no workflow is running, every inventory level's `reserved_quantity` equals the sum of its live reservation items. Its `stocked_quantity` equals the quantity it was created with plus every change made through the admin API or fulfillment.
-- When 50 carts complete at once for an item with N units at one location (backorders off), exactly N orders are placed. The others fail with the existing insufficient-inventory error and leave no reservation behind.
-- If the server process is killed at any point while placing, cancelling or fulfilling an order, the ledger of record and the counters agree after restart, and no reservation exists for an order that was not placed.
-- A workflow step that is retried after it already succeeded must not reserve or release units a second time.
-- `GET /admin/inventory-items/:id/ledger-audit` returns, per location, `expected_reserved`, `actual_reserved`, `expected_stocked` and `actual_stocked`, computed from the ledger of record and the stored counters.
-- `POST /admin/inventory-ledger/reconcile` sets every drifted counter back to the value the ledger of record implies and returns the levels it changed with old and new values. A second call right after returns an empty list.
-- Single-user flows (creating items, adjusting stock, reserving, placing, cancelling and fulfilling orders) return the same responses and status codes as they do today.
+- With no workflow running, `reserved_quantity` is the sum of live reservation items, and `stocked_quantity` is the starting quantity plus every admin or fulfillment change.
+- 50 carts checking out at once for N units at one location, backorders off: N orders get placed, the rest get the usual insufficient-inventory error and leave no reservation.
+- Kill the server anywhere while placing, cancelling or fulfilling an order. After restart the counters match, and there's no reservation left for an order that never got placed.
+- A retried workflow step never reserves or releases twice.
+- `GET /admin/inventory-items/:id/ledger-audit` returns, per location, `expected_reserved`, `actual_reserved`, `expected_stocked` and `actual_stocked`.
+- `POST /admin/inventory-ledger/reconcile` fixes drifted counters and returns what it changed, with old and new values. Run it again and it returns an empty list.
 
-Keep PostgreSQL as the only datastore. Any schema change has to ship as a module migration that works on a database with existing orders.
+Anything a single user does today should behave exactly as it does now. Postgres only, and schema changes go in a module migration that runs fine on a database that already has orders.
